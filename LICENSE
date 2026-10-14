@@ -1,0 +1,7 @@
+
+**Dos detalles antes de subirlo:**
+
+1. **Cambia `TU_USUARIO`** en la línea de `git clone` por tu usuario real de GitHub.
+2. Si vas a usar la **licencia MIT** (como dice el README), GitHub te la crea fácil: en tu repositorio ya creado, botón **"Add file" → "Create new file"**, escribe `LICENSE` como nombre, y GitHub te ofrecerá automáticamente una plantilla para elegirla.
+
+**Estructura final del repositorio:**
