@@ -1,6 +1,5 @@
+streamlit>=1.42
 SpeechRecognition
-pyaudio
 deep-translator
 gTTS
-pygame
 langdetect
