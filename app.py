@@ -1,48 +1,29 @@
-#!/usr/bin/env python3
-"""Traductor bilingüe de voz a voz con detección automática de idioma."""
-
-import time
+import io
+import streamlit as st
 import speech_recognition as sr
 from deep_translator import GoogleTranslator
 from gtts import gTTS
-import pygame
 from langdetect import detect_langs, DetectorFactory
 
-DetectorFactory.seed = 0  # hace que la detección dé siempre el mismo resultado
+DetectorFactory.seed = 0
 
-IDIOMAS = {
-    "es": "es-ES",
-    "en": "en-US",
-    "fr": "fr-FR",
-    "de": "de-DE",
-    "it": "it-IT",
-    "pt": "pt-BR",
-}
+st.set_page_config(page_title="Traductor bilingüe de voz", page_icon="🎤")
 
-NOMBRES = {"es": "español", "en": "inglés", "fr": "francés",
-           "de": "alemán", "it": "italiano", "pt": "portugués"}
+IDIOMAS = {"es": "es-ES", "en": "en-US", "fr": "fr-FR",
+           "de": "de-DE", "it": "it-IT", "pt": "pt-BR"}
+NOMBRES = {"es": "Español", "en": "Inglés", "fr": "Francés",
+           "de": "Alemán", "it": "Italiano", "pt": "Portugués"}
 
 
-def pedir_dos_idiomas():
-    while True:
-        a = input(f"Idioma A ({', '.join(IDIOMAS)}): ").strip().lower()
-        b = input("Idioma B: ").strip().lower()
-        if a in IDIOMAS and b in IDIOMAS and a != b:
-            return a, b
-        print("Deben ser dos códigos distintos de la lista.")
-
-
-def detectar(texto, candidatos):
-    """Devuelve la probabilidad de que 'texto' esté en cada idioma candidato."""
-    try:
-        dets = {d.lang: d.prob for d in detect_langs(texto)}
-    except Exception:
-        return {c: 0.0 for c in candidatos}
-    return {c: dets.get(c, 0.0) for c in candidatos}
-
-
-def transcribir(r, audio, lang_a, lang_b):
+def transcribir(audio_bytes, lang_a, lang_b):
     """Transcribe el audio probando ambos idiomas. Devuelve (texto, idioma)."""
+    r = sr.Recognizer()
+    try:
+        with sr.AudioFile(io.BytesIO(audio_bytes)) as source:
+            audio = r.record(source)
+    except Exception:
+        return None, None
+
     candidatos = []
     for cod in (lang_a, lang_b):
         try:
@@ -54,77 +35,89 @@ def transcribir(r, audio, lang_a, lang_b):
         alt = res["alternative"][0]
         texto = alt.get("transcript", "").strip()
         if texto:
-            candidatos.append({
-                "cod": cod,
-                "texto": texto,
-                "conf": float(alt.get("confidence", 0.0)),
-            })
+            candidatos.append({"cod": cod, "texto": texto,
+                               "conf": float(alt.get("confidence", 0.0))})
 
     if not candidatos:
         return None, None
     if len(candidatos) == 1:
-        c = candidatos[0]
-        return c["texto"], c["cod"]
+        return candidatos[0]["texto"], candidatos[0]["cod"]
 
-    # Decisión: gana la confianza de Google; si están muy igualadas, desempata langdetect
+    # Dos candidatos: decide la confianza; si está muy igualada, langdetect
     ca, cb = candidatos
     if abs(ca["conf"] - cb["conf"]) >= 0.10:
         ganador = max(candidatos, key=lambda c: c["conf"])
     else:
-        pa = detectar(ca["texto"], (lang_a, lang_b))[lang_a]
-        pb = detectar(cb["texto"], (lang_a, lang_b))[lang_b]
-        ganador = ca if pa >= pb else cb
+        def prob(texto, cod):
+            try:
+                return max((d.prob for d in detect_langs(texto) if d.lang == cod),
+                           default=0.0)
+            except Exception:
+                return 0.0
+        ganador = ca if prob(ca["texto"], lang_a) >= prob(cb["texto"], lang_b) else cb
     return ganador["texto"], ganador["cod"]
 
 
-def hablar(texto, cod):
-    gTTS(text=texto, lang=cod).save("temp.mp3")
-    pygame.mixer.music.load("temp.mp3")
-    pygame.mixer.music.play()
-    while pygame.mixer.music.get_busy():
-        time.sleep(0.1)
+def tts_bytes(texto, cod):
+    """Genera el audio mp3 en memoria (sin archivos temporales)."""
+    buf = io.BytesIO()
+    gTTS(text=texto, lang=cod).write_to_fp(buf)
+    buf.seek(0)
+    return buf
 
 
-def main():
-    pygame.mixer.init()
-    r = sr.Recognizer()
+if "historial" not in st.session_state:
+    st.session_state.historial = []
 
-    print("=== Traductor bilingüe con detección automática ===")
-    print("Elige los DOS idiomas de la conversación (el orden no importa).")
-    lang_a, lang_b = pedir_dos_idiomas()
-    print(f"\nConversación: {NOMBRES[lang_a]} <-> {NOMBRES[lang_b]}")
-    print("Habla en cualquiera de los dos; se traducirá al otro. (Ctrl+C para salir)")
+st.title("🎤🌍 Traductor bilingüe de voz")
+st.caption("Habla en cualquiera de los dos idiomas: se detecta solo y se traduce al otro.")
 
-    with sr.Microphone() as mic:
-        r.adjust_for_ambient_noise(mic, duration=1)
-        while True:
-            print("\n🎤 Escuchando...")
-            try:
-                audio = r.listen(mic, timeout=5, phrase_time_limit=10)
-            except sr.WaitTimeoutError:
-                continue
+col1, _, col2 = st.columns([1, 0.2, 1])
+with col1:
+    lang_a = st.selectbox("Idioma A", list(IDIOMAS),
+                          format_func=lambda c: NOMBRES[c])
+with col2:
+    lang_b = st.selectbox("Idioma B", list(IDIOMAS), index=1,
+                          format_func=lambda c: NOMBRES[c])
 
-            try:
-                texto, idioma = transcribir(r, audio, lang_a, lang_b)
-            except sr.RequestError as e:
-                print("Error de conexión:", e)
-                continue
+with st.sidebar:
+    st.header("Cómo usar")
+    st.markdown("1. Elige los dos idiomas\n2. Graba tu frase\n3. Detén y escucha la traducción")
+    if st.button("🗑️ Borrar conversación"):
+        st.session_state.historial = []
+        st.rerun()
 
-            if texto is None:
-                print("No te entendí, repite por favor.")
-                continue
+if lang_a == lang_b:
+    st.warning("Elige dos idiomas distintos.")
+    st.stop()
 
-            destino = lang_b if idioma == lang_a else lang_a
-            print(f"Tú ({idioma}): {texto}")
+# Historial de turnos anteriores
+for idioma, texto, destino, traduccion in st.session_state.historial:
+    with st.chat_message("user"):
+        st.markdown(f"**{NOMBRES[idioma]}:** {texto}")
+    with st.chat_message("assistant"):
+        st.markdown(f"**{NOMBRES[destino]}:** {traduccion}")
 
+# Grabación desde el navegador (widget nativo de Streamlit)
+audio_file = st.audio_input("🎙️ Pulsa para grabar tu frase")
+
+if audio_file is not None:
+    with st.spinner("Detectando idioma y transcribiendo..."):
+        texto, idioma = transcribir(audio_file.getvalue(), lang_a, lang_b)
+
+    if texto is None:
+        st.error("No se entendió el audio. Graba de nuevo, hablando más claro y cerca del micrófono.")
+    else:
+        destino = lang_b if idioma == lang_a else lang_a
+        with st.spinner("Traduciendo..."):
             traduccion = GoogleTranslator(source=idioma, target=destino).translate(texto)
-            print(f"Traducción ({destino}): {traduccion}")
+        with st.spinner("Generando voz..."):
+            mp3 = tts_bytes(traduccion, destino)
 
-            hablar(traduccion, destino)
+        with st.chat_message("user"):
+            st.markdown(f"**{NOMBRES[idioma]}:** {texto}")
+        with st.chat_message("assistant"):
+            st.markdown(f"**{NOMBRES[destino]}:** {traduccion}")
 
-
-if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\n¡Adiós!")
+        st.audio(mp3, format="audio/mp3", autoplay=True)
+        st.session_state.historial.append((idioma, texto, destino, traduccion))
