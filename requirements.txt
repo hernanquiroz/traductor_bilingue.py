@@ -3,3 +3,4 @@ pyaudio
 deep-translator
 gTTS
 pygame
+langdetect
